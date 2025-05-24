@@ -41,7 +41,7 @@ async fn write_text_post_to_file(title: &str, body: &str, subreddit: &str) -> io
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '_')
         .collect::<String>();
-    let filename = format!("{}", safe_title);
+    let filename = format!("{}.json", safe_title);
 
     let json = serde_json::to_string_pretty(&the_story)?;
 

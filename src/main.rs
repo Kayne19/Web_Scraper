@@ -14,8 +14,8 @@ async fn main() {
     let text_urls = ["https://www.reddit.com/r/MaliciousCompliance/top.json", 
     "https://www.reddit.com/r/tifu/top.json", "https://www.reddit.com/r/entitledparents/top.json"];
 
-    let video_urls = ["https://www.reddit.com/r/funny/top.json",];
-    let amount_of_top_posts = 55usize;
+    let video_urls = ["https://www.reddit.com/r/funny/top.json?limit=100",];
+    let amount_of_top_posts = 125usize;
     let my_client = build_client();
     
 
@@ -24,46 +24,34 @@ async fn main() {
     let sem = Arc::new(Semaphore::new(3));
     let mut all_futures: Vec<BoxFuture<'static, ()>> = Vec::new();
 
+    // texts
+    for url in &text_urls {
+        let client = my_client.clone();
+        let url    = url.to_string();
+        let sem    = sem.clone();
 
-    let mut iter = text_urls.iter();
-    let mut text_futures = Vec::new();
-    while let Some(&url) = iter.next() {
-        text_futures.push({
-            let client = my_client.clone();
-            let url    = url.to_string();
-            let sem    = sem.clone();
-            async move {
+        all_futures.push(async move {
             let _permit = sem.acquire().await.unwrap();
-            //sleep(Duration::from_millis(100)).await;
-
-            write_bulk_posts_to_file(get_posts(&client, &url, amount_of_top_posts, false).await.unwrap()).await.unwrap();
-            
-        }
-        });
+            write_bulk_posts_to_file(
+                get_posts(&client, &url, amount_of_top_posts, false).await.unwrap()).await.unwrap();
+        }.boxed());
     }
-join_all(text_futures).await;
 
+    // videos
+    for url in &video_urls {
+        let client = my_client.clone();
+        let url    = url.to_string();
+        let sem    = sem.clone();
 
-    let mut video_iter = video_urls.iter();
-    let mut video_futures = Vec::new();
-    while let Some(&url) = video_iter.next() {
-        video_futures.push({
-            let client = my_client.clone();
-            let url    = url.to_string();
-            let sem    = sem.clone();
-            async move {
+        all_futures.push(async move {
             let _permit = sem.acquire().await.unwrap();
-            //sleep(Duration::from_millis(100)).await;
-
             write_bulk_videos_to_file(get_posts(&client, &url, amount_of_top_posts, true).await.unwrap()).await.unwrap();
-            
-        }
-        });
+        }.boxed());
     }
-join_all(video_futures).await;
 
-
+    join_all(all_futures).await;
 }
+
 
 
 
