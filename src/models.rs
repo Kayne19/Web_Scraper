@@ -8,6 +8,15 @@ pub struct RedditTextPost {
     pub unused_content: bool,
 }
 
+#[derive(Serialize)]
+pub struct RedditVideoPost {
+    pub title: String,
+    pub video_link: String,
+    pub sound_link: Option<String>,
+    pub subreddit: String,
+    pub unused_content: bool,
+}
+
 #[derive(Deserialize)]
 pub struct WebPage {
     pub data: ListingData,
@@ -29,4 +38,21 @@ pub struct Child {
     #[serde(rename = "selftext")]
     pub body: String,
     pub subreddit: String,
+    pub secure_media: Option<SecureMediaWrapper>,
+    pub is_video: bool
+  
+}
+
+#[derive(Deserialize)]
+pub struct SecureMediaWrapper {
+    pub reddit_video: Option<reddit_secure_media>,
+}
+
+#[derive(Deserialize)]
+pub struct reddit_secure_media {
+    #[serde(rename = "fallback_url")]
+    pub video_link: String,
+    #[serde(rename = "hls_url")]
+    pub audio_url: Option<String>,
+    
 }

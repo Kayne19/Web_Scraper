@@ -14,7 +14,7 @@ pub fn build_client() -> Client{
 }
 
 
-pub async fn get_text_posts(current_client: &reqwest::Client, current_url: &str, amount_of_top_posts: usize) -> Result<Vec<Child>, reqwest::Error> {
+pub async fn get_posts(current_client: &reqwest::Client, current_url: &str, amount_of_top_posts: usize, videos_only: bool) -> Result<Vec<Child>, reqwest::Error> {
     let response = current_client
         .get(current_url)
         .send()
@@ -33,9 +33,15 @@ pub async fn get_text_posts(current_client: &reqwest::Client, current_url: &str,
         if i >= amount_of_top_posts {
             break;
         }
+
+        if wrapper.data.title.to_lowercase().contains("update") || wrapper.data.is_video != videos_only {
+            println!("Post failed update/video check: {}", wrapper.data.title);
+            continue;
+        }
+
         children.push(wrapper.data);
         i += 1;
     }
-    
+
     Ok(children)
 }
