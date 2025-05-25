@@ -1,65 +1,112 @@
 use futures::future::{BoxFuture, FutureExt, join_all};
-use tokio::sync::Semaphore;
+use futures::stream::StreamExt;
+use futures::pin_mut;
+use tokio::sync::{Semaphore, mpsc};
 use std::sync::Arc;
+use std::time::Instant;
+use std::collections::HashMap;
+use dashmap::DashMap;
 
 mod models;
+use models::{RedditTextPost, RedditVideoPost, Child};
 mod myredditapi;
-use myredditapi::{build_client, get_posts};
+use myredditapi::{build_client, get_posts, stream_posts};
 mod readnwrite;
-use readnwrite::{write_bulk_posts_to_file, write_bulk_videos_to_file, clear_folder};
 // THIS IS FOR REDDIT
 
 #[tokio::main]
-async fn main() {
-    let text_urls = ["https://www.reddit.com/r/MaliciousCompliance/top.json", 
-    "https://www.reddit.com/r/tifu/top.json", "https://www.reddit.com/r/entitledparents/top.json"];
+async fn main() -> anyhow::Result<()> {
+    let start = Instant::now();
+    let text_urls = [
+        "https://reddit.com/r/MaliciousCompliance.json?limit=100",
+        "https://reddit.com/r/tifu.json?limit=100",
+        "https://reddit.com/r/entitledparents.json?limit=100",
+        "https://reddit.com/r/the10thdentist.json?limit=100",
+        "https://reddit.com/r/unpopularopinion.json?limit=100",
+        "https://reddit.com/r/steam.json?limit=100",
+        "https://reddit.com/r/copypasta.json?limit=100",
+        "https://reddit.com/r/advice.json?limit=100",
+        "https://reddit.com/r/tarkov.json?limit=100",
+        "https://reddit.com/r/amitheasshole.json?limit=100",
+        "https://reddit.com/r/nosleep.json?limit=100",
+        "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
+    ];
+    let amount = 512;
+    let client = build_client();
+    let sem    = Arc::new(Semaphore::new(3));
 
-    let video_urls = ["https://www.reddit.com/r/funny/top.json?limit=100",];
-    let amount_of_top_posts = 125usize;
-    let my_client = build_client();
-    
+    // 1) prepare to collect all producer handles and their receivers
+    let mut handles = Vec::new();
+    let mut receivers = Vec::new();
+    let mut is_first_subreddit = true;
 
-    //clear_folder("redditStories").await.unwrap();
-
-    let sem = Arc::new(Semaphore::new(3));
-    let mut all_futures: Vec<BoxFuture<'static, ()>> = Vec::new();
-
-    // texts
+    // 2) spawn all of your producers, and push each `post_receiver` into `receivers`
     for url in &text_urls {
-        let client = my_client.clone();
-        let url    = url.to_string();
-        let sem    = sem.clone();
+        let client = client.clone();
+        let sem = sem.clone();
+        let url_str = url.to_string();
 
-        all_futures.push(async move {
+        let first_sub = is_first_subreddit;
+        is_first_subreddit = false;
+
+        let (sender, post_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+        receivers.push(post_receiver);
+
+        let handle = tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
-            write_bulk_posts_to_file(
-                get_posts(&client, &url, amount_of_top_posts, false).await.unwrap()).await.unwrap();
-        }.boxed());
+            let posts = stream_posts(&client, &url_str, amount, false);
+            pin_mut!(posts);
+
+            let name = extract_subreddit_name(&url_str);
+            sender.send(readnwrite::open_subarray(&name, first_sub)).unwrap();
+
+            eprintln!("Fetching posts from {}:", name);
+            let mut is_first_post = true;
+            while let Some(item) = posts.next().await {
+                match item {
+                    Ok(child) => {
+                        let chunk = readnwrite::serialize_post(&child, is_first_post);
+                        sender.send(chunk).unwrap();
+                        is_first_post = false;
+                    }
+                    Err(err) => {
+                        eprintln!("  stream_posts failed for `{}`: {}", name, err);
+                    }
+                }
+            }
+            // close this subreddit’s array
+            sender.send(vec![b']']).unwrap();
+            // dropping the sender here will close *this* channel
+            drop(sender);
+
+            Ok::<(), anyhow::Error>(())
+        });
+        handles.push(handle);
     }
 
-    // videos
-    for url in &video_urls {
-        let client = my_client.clone();
-        let url    = url.to_string();
-        let sem    = sem.clone();
+    // 3) now that you have *all* your receivers, spawn the writer
+    let writer = tokio::spawn(
+        readnwrite::stream_posts_to_file(receivers, "all_posts.json")
+    );
 
-        all_futures.push(async move {
-            let _permit = sem.acquire().await.unwrap();
-            write_bulk_videos_to_file(get_posts(&client, &url, amount_of_top_posts, true).await.unwrap()).await.unwrap();
-        }.boxed());
+    // 4) wait for all producers to finish (they’ll each drop their sender when done)
+    for h in handles {
+        h.await??;
     }
 
-    join_all(all_futures).await;
+    // 5) by now every sender is dropped ⇒ writer’s streams will all close ⇒ it can finish
+    writer.await??;
+
+    println!("Done in {:.2?}", start.elapsed());
+    Ok(())
 }
 
 
-
-
-
-
-
-
-
-
-
-
+fn extract_subreddit_name(url: &str) -> String {
+    url.split("/r/")
+       .nth(1)
+       .and_then(|rest| rest.split('.').next())
+       .unwrap_or("unknown")
+       .to_string()
+}
+    

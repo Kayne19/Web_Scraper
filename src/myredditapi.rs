@@ -1,6 +1,8 @@
 use crate::models::{WebPage, Child};
 use reqwest::{Client, Error};
 use tokio::time::{sleep, Duration};
+use async_stream::try_stream;
+use futures::stream::Stream;
 
 
 
@@ -11,6 +13,27 @@ pub fn build_client() -> Client{
         .unwrap();
 
     my_client
+}
+
+pub fn stream_posts<'a>(client: &'a reqwest::Client, url: &'a str, amount: usize, videos_only: bool) -> impl Stream<Item = Result<Child, Error>> + 'a {
+    try_stream! {
+        let resp = client.get(url).send().await?;
+        let listing: WebPage = resp.error_for_status()?.json().await?;
+        println!("fetched {} items from {}", listing.data.children.len(), url);
+
+        let mut count = 0;
+        for wrapper in listing.data.children {
+            if count >= amount {
+                break;
+            }
+            let post = wrapper.data;
+            if post.title.to_lowercase().contains("update") || post.is_video != videos_only {
+                continue;
+            }
+            count += 1;
+            yield post
+        }
+    }
 }
 
 
