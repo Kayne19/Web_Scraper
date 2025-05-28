@@ -12,10 +12,14 @@ use models::{RedditTextPost, RedditVideoPost, Child};
 mod myredditapi;
 use myredditapi::{build_client, get_posts, stream_posts};
 mod readnwrite;
-// THIS IS FOR REDDIT
+use readnwrite::{stream_posts_to_file, open_subarray, serialize_post};
+/// THIS IS FOR REDDIT'S JSON
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let amount = 512;
+
+
     let start = Instant::now();
     let text_urls = [
         "https://reddit.com/r/MaliciousCompliance.json?limit=100",
@@ -30,10 +34,57 @@ async fn main() -> anyhow::Result<()> {
         "https://reddit.com/r/amitheasshole.json?limit=100",
         "https://reddit.com/r/nosleep.json?limit=100",
         "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
+        "https://reddit.com/r/MaliciousCompliance.json?limit=100",
+        "https://reddit.com/r/tifu.json?limit=100",
+        "https://reddit.com/r/entitledparents.json?limit=100",
+        "https://reddit.com/r/the10thdentist.json?limit=100",
+        "https://reddit.com/r/unpopularopinion.json?limit=100",
+        "https://reddit.com/r/steam.json?limit=100",
+        "https://reddit.com/r/copypasta.json?limit=100",
+        "https://reddit.com/r/advice.json?limit=100",
+        "https://reddit.com/r/tarkov.json?limit=100",
+        "https://reddit.com/r/amitheasshole.json?limit=100",
+        "https://reddit.com/r/nosleep.json?limit=100",
+        "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
+        "https://reddit.com/r/MaliciousCompliance.json?limit=100",
+        "https://reddit.com/r/tifu.json?limit=100",
+        "https://reddit.com/r/entitledparents.json?limit=100",
+        "https://reddit.com/r/the10thdentist.json?limit=100",
+        "https://reddit.com/r/unpopularopinion.json?limit=100",
+        "https://reddit.com/r/steam.json?limit=100",
+        "https://reddit.com/r/copypasta.json?limit=100",
+        "https://reddit.com/r/advice.json?limit=100",
+        "https://reddit.com/r/tarkov.json?limit=100",
+        "https://reddit.com/r/amitheasshole.json?limit=100",
+        "https://reddit.com/r/nosleep.json?limit=100",
+        "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
+        "https://reddit.com/r/MaliciousCompliance.json?limit=100",
+        "https://reddit.com/r/tifu.json?limit=100",
+        "https://reddit.com/r/entitledparents.json?limit=100",
+        "https://reddit.com/r/the10thdentist.json?limit=100",
+        "https://reddit.com/r/unpopularopinion.json?limit=100",
+        "https://reddit.com/r/steam.json?limit=100",
+        "https://reddit.com/r/copypasta.json?limit=100",
+        "https://reddit.com/r/advice.json?limit=100",
+        "https://reddit.com/r/tarkov.json?limit=100",
+        "https://reddit.com/r/amitheasshole.json?limit=100",
+        "https://reddit.com/r/nosleep.json?limit=100",
+        "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
+        "https://reddit.com/r/MaliciousCompliance.json?limit=100",
+        "https://reddit.com/r/tifu.json?limit=100",
+        "https://reddit.com/r/entitledparents.json?limit=100",
+        "https://reddit.com/r/the10thdentist.json?limit=100",
+        "https://reddit.com/r/unpopularopinion.json?limit=100",
+        "https://reddit.com/r/steam.json?limit=100",
+        "https://reddit.com/r/copypasta.json?limit=100",
+        "https://reddit.com/r/advice.json?limit=100",
+        "https://reddit.com/r/tarkov.json?limit=100",
+        "https://reddit.com/r/amitheasshole.json?limit=100",
+        "https://reddit.com/r/nosleep.json?limit=100",
+        "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
     ];
-    let amount = 512;
     let client = build_client();
-    let sem    = Arc::new(Semaphore::new(3));
+    let sem    = Arc::new(Semaphore::new(4));
 
     // 1) prepare to collect all producer handles and their receivers
     let mut handles = Vec::new();
@@ -100,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Done in {:.2?}", start.elapsed());
     Ok(())
 }
+
 
 
 fn extract_subreddit_name(url: &str) -> String {

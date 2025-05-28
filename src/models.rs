@@ -41,6 +41,7 @@ pub struct WebPage {
 
 #[derive(Deserialize)]
 pub struct ListingData {
+    pub after: Option<String>,
     pub children: Vec<ChildWrapper>,
 }
 
