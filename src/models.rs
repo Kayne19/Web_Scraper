@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
+use std::{clone, collections::HashMap};
 
 /* 
 #[derive(Serialize, Deserialize)]
@@ -50,7 +50,7 @@ pub struct ChildWrapper {
     pub data: Child,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Child {
     pub title: String,
     #[serde(rename = "selftext")]
@@ -61,12 +61,12 @@ pub struct Child {
   
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SecureMediaWrapper {
     pub reddit_video: Option<reddit_secure_media>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct reddit_secure_media {
     #[serde(rename = "fallback_url")]
     pub video_link: String,

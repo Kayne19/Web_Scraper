@@ -3,6 +3,9 @@ use reqwest::{Client, Error};
 use tokio::time::{sleep, Duration};
 use async_stream::try_stream;
 use futures::stream::Stream;
+use futures::pin_mut;
+use futures::StreamExt;
+use rand::Rng;
 
 
 
@@ -16,74 +19,49 @@ pub fn build_client() -> Client{
     my_client
 }
 
-pub fn stream_posts<'a>(client: &'a reqwest::Client, url: &'a str, total_number_of_posts_to_grab: usize, videos_only: bool) -> impl Stream<Item = Result<Child, Error>> + 'a {
+pub fn stream_posts_to_channel<'a>(client: &'a reqwest::Client, url: &'a str, total_number_of_posts_to_grab: usize, videos_only: bool) -> impl Stream<Item = Result<Child, Error>> + 'a {
     try_stream! {
         let mut current_url = url.to_string();
-        
-
         let mut posts_grabbed_so_far = 0;
-        while posts_grabbed_so_far < total_number_of_posts_to_grab {
 
+        while posts_grabbed_so_far < total_number_of_posts_to_grab {
+            let start = std::time::Instant::now();
             let website_response = client.get(current_url.clone()).send().await?;
             let listing: WebPage = website_response.error_for_status()?.json().await?;
+            println!("HTTP request took: {:?}", start.elapsed());
 
-            println!("Fetched {} items from {}", listing.data.children.len(), current_url);
-            for wrapper in listing.data.children {
-                if posts_grabbed_so_far >= total_number_of_posts_to_grab {
-                    break;
-                }
-                let post = wrapper.data;
-                if post.title.to_lowercase().contains("update") || post.is_video != videos_only {
-                    continue;
-                }
+            let posts = fetch_posts(&listing, videos_only);
+            pin_mut!(posts);
+            while let Some(res) = posts.next().await {
+                let current_post = res?;
                 posts_grabbed_so_far += 1;
-                yield post
+                yield current_post;
+                if posts_grabbed_so_far >= total_number_of_posts_to_grab {return;}
             }
-            if let Some(after) = listing.data.after.as_ref() {
-                let next_url = format!("{}&after={}", url, after);
-                println!("Fetching next page: {}", next_url);
+            
+            if let Some(next_page_id) = listing.data.after.as_ref() {
+                let next_url = format!("{}&after={}", url, next_page_id);
                 current_url = next_url;
             } else {
                 println!("No more pages to fetch.");
-                break; // Stop the loop
+                break;
             }
-            // Sleep for a short duration to avoid hitting the API too hard
-            sleep(Duration::from_millis(10000)).await;
 
+            println!("Fetched {} posts so far, waiting for next page...", posts_grabbed_so_far);
+            sleep(Duration::from_millis(3192)).await;
             
         }
     }
 }
 
-
-pub async fn get_posts(current_client: &reqwest::Client, current_url: &str, amount_of_top_posts: usize, videos_only: bool) -> Result<Vec<Child>, reqwest::Error> {
-    let response = current_client
-        .get(current_url)
-        .send()
-        .await?;
-    let status = response.status();
-    eprintln!("HTTP {}", status);
-
-
-    let listing: WebPage = response.error_for_status()?.json::<WebPage>().await?;
-    let child_wrapper_vector = listing.data.children;
-
-
-    let mut i = 0;
-    let mut children = Vec::new();
-    for wrapper in child_wrapper_vector {
-        if i >= amount_of_top_posts {
-            break;
+pub fn fetch_posts<'a>(web_page: &'a WebPage, videos_only: bool) -> impl Stream<Item = Result<Child, Error>> + 'a {
+    try_stream! {
+        for wrapper in web_page.data.children.iter() {
+            let post = wrapper.data.clone();
+            if post.title.to_lowercase().contains("update") || post.is_video != videos_only {
+                continue;
+            }
+        yield post
         }
-
-        if wrapper.data.title.to_lowercase().contains("update") || wrapper.data.is_video != videos_only {
-            println!("Post failed update/video check: {}", wrapper.data.title);
-            continue;
-        }
-
-        children.push(wrapper.data);
-        i += 1;
     }
-
-    Ok(children)
 }

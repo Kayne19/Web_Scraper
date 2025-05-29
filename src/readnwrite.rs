@@ -4,56 +4,86 @@ use std::path::PathBuf;
 use tokio::fs::File;
 use futures::future::{BoxFuture, FutureExt, join_all};
 use tokio::sync::Semaphore;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, Receiver};
 use std::sync::Arc;
 use tokio::io::{self, AsyncWriteExt};
 use serde::Serialize;
+use std::time::Duration;
+use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::QueryBuilder;
 
-//pub async fn write_to_output_file
+const BATCH_SIZE: usize = 100;
 
+//pub async fn write_to_output_db
+pub async fn stream_posts_to_database(mut incoming_list: Receiver<Child>) -> sqlx::Result<()> {
 
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect("sqlite://./mydatabase.db")
+        .await?; 
+    sqlx::query("PRAGMA journal_mode = WAL;").execute(&pool).await?;
+    sqlx::query("PRAGMA synchronous = NORMAL;").execute(&pool).await?;
+    sqlx::query("PRAGMA temp_store = MEMORY;").execute(&pool).await?;
+    sqlx::query("PRAGMA cache_size = -64000;").execute(&pool).await?;
+    // 2) Initialize schema (run this once at startup)
+    sqlx::query(r#"
+    CREATE TABLE IF NOT EXISTS posts (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        title       TEXT    NOT NULL,
+        subreddit   TEXT    NOT NULL,
+        body        TEXT,
+        is_video    INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(subreddit, title)
+    );
+    "#)
+    .execute(&pool)
+    .await?;
 
-pub async fn stream_posts_to_file(mut incoming_list: Vec<UnboundedReceiver<Vec<u8>>>,output_path: &str,) -> io::Result<()> {
-    let mut file = File::create(output_path).await?;
-    file.write_all(b"{").await?; // start root object
+    let mut posts_written = 0;
+    let mut batch: Vec<Child> = Vec::new();
+    while let Some(post) = incoming_list.recv().await {
+        if batch.len() >= BATCH_SIZE {
 
-    // for each subreddit’s channel, drain it completely before moving on
-    for mut incoming in incoming_list.drain(..) {
-        while let Some(bytes) = incoming.recv().await {
-            file.write_all(&bytes).await?;
+            let mut query_buider = QueryBuilder::new("INSERT INTO posts (title, subreddit, body, is_video) ");
+            query_buider.push_values(batch.iter(), |mut b, post| {
+                b.push_bind(&post.title)
+                .push_bind(&post.subreddit)
+                .push_bind(&post.body)
+                .push_bind(post.is_video as i64);
+            });
+            query_buider.push(" ON CONFLICT(subreddit, title) DO NOTHING");
+            let query = query_buider.build();
+            query.execute(&pool).await?;
+            posts_written += batch.len();
+            batch.clear();
+            println!("Batch written. Wrote {} posts in total.", posts_written);
         }
+        batch.push(post);
+    }
+    if !batch.is_empty() {
+        let mut query_buider = QueryBuilder::new("INSERT INTO posts (title, subreddit, body, is_video) ");
+        query_buider.push_values(batch.iter(), |mut b, post| {
+            b.push_bind(&post.title)
+            .push_bind(&post.subreddit)
+            .push_bind(&post.body)
+            .push_bind(post.is_video as i64);
+        });
+        query_buider.push(" ON CONFLICT(subreddit, title) DO NOTHING");
+        let query = query_buider.build();
+        query.execute(&pool).await?;
+        posts_written += batch.len();
     }
 
-    file.write_all(b"}").await?; // close root object
-    file.flush().await?;
+
+    println!("Database writer finished. Wrote {} posts.", posts_written);
+    let (total_chars,): (i64,) = sqlx::query_as("SELECT SUM(LENGTH(title) + LENGTH(body) + LENGTH(subreddit)) FROM posts")
+        .fetch_one(&pool)
+        .await?;
+
+    println!("Total characters in DB: {}", total_chars);
     Ok(())
-}
 
-
-
-pub fn open_subarray(subreddit: &str, is_first: bool) -> Vec<u8> {
-    // build the prefix string
-    let s = if is_first {
-        // no leading comma
-        format!(r#""{}":["#, subreddit)
-    } else {
-        // comma before each subsequent subreddit
-        format!(r#","{}":["#, subreddit)
-    };
-    s.into_bytes()
-}
-
-pub fn serialize_post<T: Serialize>(post: &T, is_first: bool) -> Vec<u8> {
-    let json = serde_json::to_vec(post)
-        .expect("serialization should never fail");
-    if is_first {
-        json
-    } else {
-        let mut v = Vec::with_capacity(1 + json.len());
-        v.push(b',');
-        v.extend(json);
-        v
-    }
 }
 
 fn clean_title(title: &str) -> String {

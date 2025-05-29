@@ -10,66 +10,19 @@ use dashmap::DashMap;
 mod models;
 use models::{RedditTextPost, RedditVideoPost, Child};
 mod myredditapi;
-use myredditapi::{build_client, get_posts, stream_posts};
+use myredditapi::{build_client, stream_posts_to_channel};
 mod readnwrite;
-use readnwrite::{stream_posts_to_file, open_subarray, serialize_post};
 /// THIS IS FOR REDDIT'S JSON
+
+
+const AMOUNT_OF_POSTS_PER_SUBREDDIT: usize = 10;
+const AMOUNT_OF_CONCURRENT_WEBPAGES: usize = 2;
+const POST_BUFFER_SIZE: usize = 1000;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let amount = 512;
-
-
-    let start = Instant::now();
+    let program_start_time = Instant::now();
     let text_urls = [
-        "https://reddit.com/r/MaliciousCompliance.json?limit=100",
-        "https://reddit.com/r/tifu.json?limit=100",
-        "https://reddit.com/r/entitledparents.json?limit=100",
-        "https://reddit.com/r/the10thdentist.json?limit=100",
-        "https://reddit.com/r/unpopularopinion.json?limit=100",
-        "https://reddit.com/r/steam.json?limit=100",
-        "https://reddit.com/r/copypasta.json?limit=100",
-        "https://reddit.com/r/advice.json?limit=100",
-        "https://reddit.com/r/tarkov.json?limit=100",
-        "https://reddit.com/r/amitheasshole.json?limit=100",
-        "https://reddit.com/r/nosleep.json?limit=100",
-        "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
-        "https://reddit.com/r/MaliciousCompliance.json?limit=100",
-        "https://reddit.com/r/tifu.json?limit=100",
-        "https://reddit.com/r/entitledparents.json?limit=100",
-        "https://reddit.com/r/the10thdentist.json?limit=100",
-        "https://reddit.com/r/unpopularopinion.json?limit=100",
-        "https://reddit.com/r/steam.json?limit=100",
-        "https://reddit.com/r/copypasta.json?limit=100",
-        "https://reddit.com/r/advice.json?limit=100",
-        "https://reddit.com/r/tarkov.json?limit=100",
-        "https://reddit.com/r/amitheasshole.json?limit=100",
-        "https://reddit.com/r/nosleep.json?limit=100",
-        "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
-        "https://reddit.com/r/MaliciousCompliance.json?limit=100",
-        "https://reddit.com/r/tifu.json?limit=100",
-        "https://reddit.com/r/entitledparents.json?limit=100",
-        "https://reddit.com/r/the10thdentist.json?limit=100",
-        "https://reddit.com/r/unpopularopinion.json?limit=100",
-        "https://reddit.com/r/steam.json?limit=100",
-        "https://reddit.com/r/copypasta.json?limit=100",
-        "https://reddit.com/r/advice.json?limit=100",
-        "https://reddit.com/r/tarkov.json?limit=100",
-        "https://reddit.com/r/amitheasshole.json?limit=100",
-        "https://reddit.com/r/nosleep.json?limit=100",
-        "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
-        "https://reddit.com/r/MaliciousCompliance.json?limit=100",
-        "https://reddit.com/r/tifu.json?limit=100",
-        "https://reddit.com/r/entitledparents.json?limit=100",
-        "https://reddit.com/r/the10thdentist.json?limit=100",
-        "https://reddit.com/r/unpopularopinion.json?limit=100",
-        "https://reddit.com/r/steam.json?limit=100",
-        "https://reddit.com/r/copypasta.json?limit=100",
-        "https://reddit.com/r/advice.json?limit=100",
-        "https://reddit.com/r/tarkov.json?limit=100",
-        "https://reddit.com/r/amitheasshole.json?limit=100",
-        "https://reddit.com/r/nosleep.json?limit=100",
-        "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
         "https://reddit.com/r/MaliciousCompliance.json?limit=100",
         "https://reddit.com/r/tifu.json?limit=100",
         "https://reddit.com/r/entitledparents.json?limit=100",
@@ -84,71 +37,60 @@ async fn main() -> anyhow::Result<()> {
         "https://reddit.com/r/UnethicalLifeProTips.json?limit=100",
     ];
     let client = build_client();
-    let sem    = Arc::new(Semaphore::new(4));
+    let sem = Arc::new(Semaphore::new(AMOUNT_OF_CONCURRENT_WEBPAGES));
+    let (post_sender, post_receiver) = mpsc::channel::<Child>(POST_BUFFER_SIZE);
 
-    // 1) prepare to collect all producer handles and their receivers
+
+
+    
+    let writer = tokio::spawn(async move {
+    readnwrite::stream_posts_to_database(post_receiver).await.unwrap()
+    });
+
     let mut handles = Vec::new();
-    let mut receivers = Vec::new();
-    let mut is_first_subreddit = true;
 
     // 2) spawn all of your producers, and push each `post_receiver` into `receivers`
     for url in &text_urls {
         let client = client.clone();
         let sem = sem.clone();
         let url_str = url.to_string();
-
-        let first_sub = is_first_subreddit;
-        is_first_subreddit = false;
-
-        let (sender, post_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
-        receivers.push(post_receiver);
+        let sender = post_sender.clone();
 
         let handle = tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
-            let posts = stream_posts(&client, &url_str, amount, false);
+            let posts = stream_posts_to_channel(&client, &url_str, AMOUNT_OF_POSTS_PER_SUBREDDIT, false);
             pin_mut!(posts);
 
             let name = extract_subreddit_name(&url_str);
-            sender.send(readnwrite::open_subarray(&name, first_sub)).unwrap();
 
-            eprintln!("Fetching posts from {}:", name);
-            let mut is_first_post = true;
             while let Some(item) = posts.next().await {
                 match item {
                     Ok(child) => {
-                        let chunk = readnwrite::serialize_post(&child, is_first_post);
-                        sender.send(chunk).unwrap();
-                        is_first_post = false;
+                        sender.send(child).await?;
                     }
                     Err(err) => {
                         eprintln!("  stream_posts failed for `{}`: {}", name, err);
                     }
                 }
             }
-            // close this subreddit’s array
-            sender.send(vec![b']']).unwrap();
-            // dropping the sender here will close *this* channel
             drop(sender);
-
             Ok::<(), anyhow::Error>(())
         });
         handles.push(handle);
     }
 
-    // 3) now that you have *all* your receivers, spawn the writer
-    let writer = tokio::spawn(
-        readnwrite::stream_posts_to_file(receivers, "all_posts.json")
-    );
+    drop(post_sender);
+    
 
-    // 4) wait for all producers to finish (they’ll each drop their sender when done)
-    for h in handles {
-        h.await??;
+
+    for handle in handles {
+        handle.await??;
     }
 
-    // 5) by now every sender is dropped ⇒ writer’s streams will all close ⇒ it can finish
-    writer.await??;
+    
+    writer.await?;
 
-    println!("Done in {:.2?}", start.elapsed());
+    println!("Done in {:.2?}", program_start_time.elapsed());
     Ok(())
 }
 
