@@ -9,24 +9,27 @@ use std::sync::Arc;
 use tokio::io::{self, AsyncWriteExt};
 use serde::Serialize;
 use std::time::Duration;
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::QueryBuilder;
+use std::str::FromStr;
 
 const BATCH_SIZE: usize = 100;
 
 //pub async fn write_to_output_db
 pub async fn stream_posts_to_database(mut incoming_list: Receiver<Child>) -> sqlx::Result<()> {
+    let mut connect_opts = SqliteConnectOptions::from_str("sqlite://./mydatabase.db")?
+    .create_if_missing(true);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .acquire_timeout(Duration::from_secs(5))
-        .connect("sqlite://./mydatabase.db")
+        .connect_with(connect_opts)
         .await?; 
     sqlx::query("PRAGMA journal_mode = WAL;").execute(&pool).await?;
     sqlx::query("PRAGMA synchronous = NORMAL;").execute(&pool).await?;
     sqlx::query("PRAGMA temp_store = MEMORY;").execute(&pool).await?;
     sqlx::query("PRAGMA cache_size = -64000;").execute(&pool).await?;
-    // 2) Initialize schema (run this once at startup)
+    // Initialize schema (run this once at startup)
     sqlx::query(r#"
     CREATE TABLE IF NOT EXISTS posts (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,

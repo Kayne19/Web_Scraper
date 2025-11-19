@@ -19,7 +19,7 @@ pub fn build_client() -> Client{
     my_client
 }
 
-pub fn stream_posts_to_channel<'a>(client: &'a reqwest::Client, url: &'a str, total_number_of_posts_to_grab: usize, videos_only: bool) -> impl Stream<Item = Result<Child, Error>> + 'a {
+pub fn stream_posts_to_channel<'a>(client: &'a reqwest::Client, url: &'a str, total_number_of_posts_to_grab: usize) -> impl Stream<Item = Result<Child, Error>> + 'a {
     try_stream! {
         let mut current_url = url.to_string();
         let mut posts_grabbed_so_far = 0;
@@ -30,7 +30,7 @@ pub fn stream_posts_to_channel<'a>(client: &'a reqwest::Client, url: &'a str, to
             let listing: WebPage = website_response.error_for_status()?.json().await?;
             println!("HTTP request took: {:?}", start.elapsed());
 
-            let posts = fetch_posts(&listing, videos_only);
+            let posts = fetch_posts(&listing);
             pin_mut!(posts);
             while let Some(res) = posts.next().await {
                 let current_post = res?;
@@ -54,11 +54,11 @@ pub fn stream_posts_to_channel<'a>(client: &'a reqwest::Client, url: &'a str, to
     }
 }
 
-pub fn fetch_posts<'a>(web_page: &'a WebPage, videos_only: bool) -> impl Stream<Item = Result<Child, Error>> + 'a {
+pub fn fetch_posts<'a>(web_page: &'a WebPage) -> impl Stream<Item = Result<Child, Error>> + 'a {
     try_stream! {
         for wrapper in web_page.data.children.iter() {
             let post = wrapper.data.clone();
-            if post.title.to_lowercase().contains("update") || post.is_video != videos_only {
+            if post.title.to_lowercase().contains("update") {
                 continue;
             }
         yield post
